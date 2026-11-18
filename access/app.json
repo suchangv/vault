@@ -7,7 +7,7 @@
 	"auto_redirect_to_identity": true,
 	"app_launcher_visible": false,
 	"http_only_cookie_attribute": true,
-	"same_site_cookie_attribute": "strict",
+	"same_site_cookie_attribute": "lax",
 	"policies": [
 		{
 			"name": "allow only suchangv@gmail.com",

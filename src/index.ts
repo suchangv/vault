@@ -49,6 +49,55 @@ function json(body: unknown, status = 200, extra?: Record<string, string>) {
 	});
 }
 
+function htmlPage(status: number, title: string, message: string) {
+	const body = `<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex, nofollow" />
+<title>${title}</title>
+<style>
+	:root { color-scheme: dark light }
+	body { margin:0; min-height:100dvh; display:grid; place-items:center; padding:24px;
+		font:15px/1.6 system-ui,-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;
+		background:#070d11; color:#e7f2f5 }
+	.card { width:min(460px,100%); background:#0b1419; border:1px solid #1b2c35; border-radius:20px;
+		padding:28px; box-shadow:0 40px 90px -55px rgba(0,0,0,.95) }
+	.mark { width:42px;height:42px;border-radius:13px;display:grid;place-items:center;font-weight:700;
+		background:linear-gradient(160deg,#f99389,#f27c72);color:#2a0b08 }
+	h1 { font-size:20px; margin:18px 0 8px; letter-spacing:-.01em }
+	p { margin:0 0 14px; color:#8ba5ae; font-size:13.5px }
+	code { font-family:ui-monospace,Menlo,monospace; font-size:12.5px; background:#16252e; padding:2px 6px; border-radius:6px }
+	.actions { display:flex; gap:10px; flex-wrap:wrap; margin-top:18px }
+	a.btn { display:inline-flex; align-items:center; height:42px; padding:0 16px; border-radius:10px;
+		font-size:13.5px; font-weight:550; text-decoration:none; background:linear-gradient(160deg,#43d7ba,#2ec4a6); color:#032019 }
+	a.ghost { background:#101c23; border:1px solid #1b2c35; color:#e7f2f5 }
+</style>
+<div class="card">
+	<div class="mark">!</div>
+	<h1>${title}</h1>
+	<p>${message}</p>
+	<p>原因代码：<code>${status}</code></p>
+	<div class="actions">
+		<a class="btn" href="/">重新加载</a>
+		<a class="btn ghost" href="/cdn-cgi/access/logout">退出 Access 会话</a>
+	</div>
+</div>
+</html>`;
+	return new Response(body, {
+		status,
+		headers: {
+			...SECURITY_HEADERS,
+			// Fully server-generated, static markup: allow the inline <style> only
+			// on this error document so it renders without a second request.
+			"Content-Security-Policy":
+				"default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+			"Content-Type": "text/html; charset=utf-8",
+			"Cache-Control": "no-store",
+		},
+	});
+}
+
 interface VaultRow {
 	owner: string;
 	version: number;
@@ -215,13 +264,18 @@ export default {
 		// Access identity, so the app surface is never publicly reachable.
 		const auth = await authenticate(request, env);
 		if (!auth.ok) {
-			return json(
-				{
-					error: "unauthorized",
-					reason: auth.reason,
-					hint: "This app must be reached through Cloudflare Access.",
-				},
+			const messages: Record<string, string> = {
+				missing_access_token:
+					"这个请求没有被 Cloudflare Access 保护。<code>vault.suchangv.com</code> 应该只允许通过 Access 应用访问。",
+				email_not_allowed: "当前登录的 Google 账号不在白名单（suchangv@gmail.com）中。",
+				bad_audience: "Access 应用与 Worker 配置的 AUD 不一致。",
+				bad_issuer: "令牌签发者与团队域名不一致。",
+				"token expired": "Access 会话已过期，请重新登录。",
+			};
+			return htmlPage(
 				auth.status,
+				"无法访问 Vault",
+				messages[auth.reason] ?? `身份验证失败：${auth.reason.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)}`,
 			);
 		}
 
