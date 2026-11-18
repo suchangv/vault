@@ -1,0 +1,5 @@
+# Local-only overrides (never deployed, git-ignored).
+#
+# fake identity for `wrangler dev`; only honoured when DEV_AUTH_BYPASS=true
+DEV_AUTH_BYPASS=true
+DEV_AUTH_EMAIL=suchangv@gmail.com

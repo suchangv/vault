@@ -1,0 +1,18 @@
+{
+	"name": "Vault — 密码保险库",
+	"domain": "vault.suchangv.com",
+	"type": "self_hosted",
+	"session_duration": "8h",
+	"allowed_idps": ["GOOGLE_IDP_ID"],
+	"auto_redirect_to_identity": true,
+	"app_launcher_visible": false,
+	"http_only_cookie_attribute": true,
+	"same_site_cookie_attribute": "strict",
+	"policies": [
+		{
+			"name": "allow only suchangv@gmail.com",
+			"decision": "allow",
+			"include": [{ "email": { "email": "suchangv@gmail.com" } }]
+		}
+	]
+}

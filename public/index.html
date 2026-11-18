@@ -1,0 +1,246 @@
+<!doctype html>
+<html lang="zh-CN">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+		<meta name="color-scheme" content="dark light" />
+		<meta name="referrer" content="no-referrer" />
+		<meta name="robots" content="noindex, nofollow, noarchive" />
+		<title>Vault</title>
+		<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+		<link rel="stylesheet" href="/app.css" />
+	</head>
+	<body>
+		<div class="app-shell" id="app" data-state="loading">
+			<section class="screen screen-loading" id="screen-loading">
+				<div class="loading-mark" aria-hidden="true">
+					<span></span><span></span><span></span>
+				</div>
+				<p class="loading-text">正在打开保险库…</p>
+			</section>
+
+			<section class="screen screen-auth" id="screen-setup" hidden>
+				<form class="auth-card" id="setup-form" autocomplete="off">
+					<header class="auth-head">
+						<div class="brand">
+							<span class="brand-mark" aria-hidden="true">V</span>
+							<div class="brand-text">
+								<strong>Vault</strong>
+								<span>零知识密码保险库</span>
+							</div>
+						</div>
+						<h1>创建你的保险库</h1>
+						<p class="auth-lead">
+							主密码只存在于你的浏览器里。我们会用它在本地加密全部数据，
+							服务器永远只看到密文。
+						</p>
+					</header>
+
+					<div class="field">
+						<label for="setup-password">主密码</label>
+						<div class="input-wrap">
+							<input
+								id="setup-password"
+								name="password"
+								type="password"
+								autocomplete="new-password"
+								spellcheck="false"
+								minlength="10"
+								required
+								placeholder="至少 10 位，建议使用密码短语"
+							/>
+							<button type="button" class="icon-btn eye" data-target="setup-password" aria-label="显示密码"></button>
+						</div>
+					</div>
+
+					<div class="field">
+						<label for="setup-confirm">再次输入</label>
+						<div class="input-wrap">
+							<input
+								id="setup-confirm"
+								name="confirm"
+								type="password"
+								autocomplete="new-password"
+								spellcheck="false"
+								required
+								placeholder="确认主密码"
+							/>
+						</div>
+					</div>
+
+					<div class="strength" id="setup-strength" data-score="0">
+						<div class="strength-bar"><i></i></div>
+						<span class="strength-label">密码强度</span>
+					</div>
+
+					<div class="field">
+						<label for="setup-hint">密码提示 <span class="muted">（可选，会明文保存）</span></label>
+						<input
+							id="setup-hint"
+							name="hint"
+							type="text"
+							maxlength="120"
+							placeholder="例如：常用短语 + 年份"
+						/>
+					</div>
+
+					<p class="auth-error" id="setup-error" role="alert" hidden></p>
+
+					<button class="btn btn-primary btn-block" type="submit" id="setup-submit">
+						创建保险库
+					</button>
+
+					<p class="auth-note">
+						⚠️ 主密码无法找回。忘记它就只能删除保险库重新开始。
+					</p>
+				</form>
+			</section>
+
+			<section class="screen screen-auth" id="screen-unlock" hidden>
+				<form class="auth-card" id="unlock-form" autocomplete="off">
+					<header class="auth-head">
+						<div class="brand">
+							<span class="brand-mark" aria-hidden="true">V</span>
+							<div class="brand-text">
+								<strong>Vault</strong>
+								<span id="unlock-email">·</span>
+							</div>
+						</div>
+						<h1>解锁保险库</h1>
+						<p class="auth-lead" id="unlock-sub">输入主密码以解密你的凭据。</p>
+					</header>
+
+					<div class="field">
+						<label for="unlock-password">主密码</label>
+						<div class="input-wrap">
+							<input
+								id="unlock-password"
+								name="password"
+								type="password"
+								autocomplete="current-password"
+								spellcheck="false"
+								required
+								placeholder="主密码"
+							/>
+							<button type="button" class="icon-btn eye" data-target="unlock-password" aria-label="显示密码"></button>
+						</div>
+					</div>
+
+					<p class="auth-error" id="unlock-error" role="alert" hidden></p>
+
+					<button class="btn btn-primary btn-block" type="submit" id="unlock-submit">
+						解锁
+					</button>
+
+					<p class="auth-note" id="unlock-meta"></p>
+					<p class="auth-note">
+						<button type="button" class="link-btn" id="unlock-reset">忘记主密码？删除保险库并重新开始</button>
+					</p>
+				</form>
+			</section>
+
+			<section class="screen screen-error" id="screen-error" hidden>
+				<div class="auth-card">
+					<div class="brand">
+						<span class="brand-mark brand-mark-danger" aria-hidden="true">!</span>
+						<div class="brand-text">
+							<strong>无法访问</strong>
+							<span>Vault</span>
+						</div>
+					</div>
+					<h1 id="error-title">身份验证失败</h1>
+					<p class="auth-lead" id="error-message"></p>
+					<div class="error-actions">
+						<button class="btn btn-primary" id="error-reload" type="button">重新加载</button>
+						<button class="btn btn-ghost" id="error-logout" type="button">退出 Access 会话</button>
+					</div>
+					<p class="auth-note">
+						本应用只能通过 Cloudflare Access 登录後访问，白名单账号：<span id="error-allow"></span>
+					</p>
+				</div>
+			</section>
+
+			<section class="screen screen-vault" id="screen-vault" hidden>
+				<aside class="sidebar">
+					<header class="sidebar-head">
+						<div class="brand brand-compact">
+							<span class="brand-mark" aria-hidden="true">V</span>
+							<div class="brand-text">
+								<strong>Vault</strong>
+								<span id="account-email">·</span>
+							</div>
+						</div>
+						<button class="icon-btn" id="btn-settings" type="button" aria-label="设置" title="设置"></button>
+					</header>
+
+					<div class="search-row">
+						<div class="search-box">
+							<input
+								id="search-input"
+								type="search"
+								placeholder="搜索标题、账号、网址…"
+								autocomplete="off"
+								spellcheck="false"
+								aria-label="搜索"
+							/>
+							<kbd class="search-kbd">/</kbd>
+						</div>
+						<button class="btn btn-primary btn-icon" id="btn-new" type="button" aria-label="新建条目" title="新建条目">
+							<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+						</button>
+					</div>
+
+					<nav class="chips" id="filter-chips" aria-label="筛选">
+						<button class="chip is-active" data-filter="all" type="button">全部</button>
+						<button class="chip" data-filter="favorite" type="button">收藏</button>
+						<button class="chip" data-filter="login" type="button">登录</button>
+						<button class="chip" data-filter="card" type="button">银行卡</button>
+						<button class="chip" data-filter="note" type="button">笔记</button>
+					</nav>
+
+					<div class="item-list-wrap">
+						<ul class="item-list" id="item-list" role="listbox" aria-label="条目列表"></ul>
+						<div class="empty-list" id="empty-list" hidden>
+							<p class="empty-title">这里空空如也</p>
+							<p class="empty-sub">点击右上角 + 添加第一条凭据。</p>
+						</div>
+					</div>
+
+					<footer class="sidebar-foot">
+						<div class="save-state" id="save-state" data-state="saved">
+							<span class="dot"></span><span class="save-text">已保存</span>
+						</div>
+						<button class="btn btn-ghost btn-sm" id="btn-lock" type="button">
+							<svg viewBox="0 0 24 24" aria-hidden="true">
+								<rect x="4.5" y="10.5" width="15" height="10" rx="2.5" />
+								<path d="M8 10.5V7.8a4 4 0 0 1 8 0v2.7" />
+							</svg>
+							锁定
+						</button>
+					</footer>
+				</aside>
+
+				<main class="detail" id="detail" tabindex="-1">
+					<div class="detail-empty" id="detail-empty">
+						<div class="empty-illustration" aria-hidden="true">
+							<svg viewBox="0 0 120 120">
+								<rect x="24" y="42" width="72" height="54" rx="12" />
+								<path d="M42 42V32a18 18 0 0 1 36 0v10" />
+								<circle cx="60" cy="66" r="6" />
+								<path d="M60 72v10" />
+							</svg>
+						</div>
+						<p class="empty-title">选择一个条目</p>
+						<p class="empty-sub">或者按 <kbd>N</kbd> 新建。</p>
+					</div>
+					<div class="detail-body" id="detail-body" hidden></div>
+				</main>
+			</section>
+		</div>
+
+		<div class="toasts" id="toasts" aria-live="polite"></div>
+		<div class="modal-root" id="modal-root"></div>
+
+		<script type="module" src="/app.js"></script>
+	</body>
+</html>
