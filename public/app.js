@@ -26,7 +26,15 @@ const LS_KEYS = {
 	autolock: "vault.autolock",
 	hint: "vault.hint",
 	filter: "vault.filter",
+	remember: "vault.remember",
 };
+
+const DEVICE_DB = "vault-device";
+const DEVICE_STORE = "device";
+const DEVICE_KEY_ENTRY = "device-key";
+const DEVICE_TOKEN_ENTRY = "token";
+const DEVICE_AAD = new TextEncoder().encode("cf-vault:device:v1");
+const REMEMBER_DEFAULT_DAYS = 7;
 
 const state = {
 	email: "",
@@ -47,6 +55,7 @@ const state = {
 	theme: "auto",
 	accessExpiresAt: null,
 	pendingNew: null,
+	deviceRemember: null,
 };
 
 let deferredInstallPrompt = null;
@@ -189,6 +198,39 @@ async function deriveKey(password, saltB64, iterations) {
 	);
 }
 
+/**
+ * Same PBKDF2 derivation, but keeps the raw key bytes long enough to wrap them
+ * under the device key so the user can skip the master password on refresh.
+ * The session key handed to the app is still non-extractable.
+ */
+async function deriveKeyMaterial(password, saltB64, iterations) {
+	const baseKey = await crypto.subtle.importKey(
+		"raw",
+		new TextEncoder().encode(password.normalize("NFKC")),
+		"PBKDF2",
+		false,
+		["deriveKey"],
+	);
+	const extractable = await crypto.subtle.deriveKey(
+		{
+			name: "PBKDF2",
+			salt: b64ToBytes(saltB64),
+			iterations,
+			hash: "SHA-256",
+		},
+		baseKey,
+		{ name: "AES-GCM", length: 256 },
+		true,
+		["encrypt", "decrypt"],
+	);
+	const raw = new Uint8Array(await crypto.subtle.exportKey("raw", extractable));
+	const sessionKey = await crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, [
+		"encrypt",
+		"decrypt",
+	]);
+	return { sessionKey, raw };
+}
+
 async function encryptJson(key, value) {
 	const iv = randomBytes(12);
 	const ciphertext = await crypto.subtle.encrypt(
@@ -208,6 +250,187 @@ async function decryptJson(key, payload) {
 		b64ToBytes(dataB64),
 	);
 	return JSON.parse(new TextDecoder().decode(plaintext));
+}
+
+/* --------------------------------------------------------------------------
+ * Trusted device ("remember me")
+ *
+ * The vault key is wrapped with a non-extractable AES-GCM CryptoKey that lives
+ * in IndexedDB. Only the wrapped blob + expiry are stored; the vault key bytes
+ * are never persisted in clear. IndexedDB is origin-bound and the CryptoKey is
+ * non-exportable, so copying localStorage/cookies does not carry the vault to
+ * another machine. Manual / idle lock drops the token.
+ * -------------------------------------------------------------------------- */
+
+let deviceDbPromise = null;
+
+function openDeviceDb() {
+	if (deviceDbPromise) return deviceDbPromise;
+	deviceDbPromise = new Promise((resolve, reject) => {
+		if (!("indexedDB" in window)) {
+			reject(new Error("indexeddb_unavailable"));
+			return;
+		}
+		const request = indexedDB.open(DEVICE_DB, 1);
+		request.onupgradeneeded = () => request.result.createObjectStore(DEVICE_STORE);
+		request.onsuccess = () => resolve(request.result);
+		request.onerror = () => reject(request.error);
+	}).catch((error) => {
+		deviceDbPromise = null;
+		throw error;
+	});
+	return deviceDbPromise;
+}
+
+async function deviceGet(key) {
+	try {
+		const db = await openDeviceDb();
+		return await new Promise((resolve, reject) => {
+			const tx = db.transaction(DEVICE_STORE, "readonly");
+			const request = tx.objectStore(DEVICE_STORE).get(key);
+			request.onsuccess = () => resolve(request.result ?? null);
+			request.onerror = () => reject(request.error);
+		});
+	} catch {
+		return null;
+	}
+}
+
+async function deviceSet(key, value) {
+	try {
+		const db = await openDeviceDb();
+		await new Promise((resolve, reject) => {
+			const tx = db.transaction(DEVICE_STORE, "readwrite");
+			tx.objectStore(DEVICE_STORE).put(value, key);
+			tx.oncomplete = () => resolve();
+			tx.onerror = () => reject(tx.error);
+		});
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+async function deviceDelete(key) {
+	try {
+		const db = await openDeviceDb();
+		await new Promise((resolve, reject) => {
+			const tx = db.transaction(DEVICE_STORE, "readwrite");
+			tx.objectStore(DEVICE_STORE).delete(key);
+			tx.oncomplete = () => resolve();
+			tx.onerror = () => reject(tx.error);
+		});
+	} catch {
+		/* ignore */
+	}
+}
+
+function rememberDays() {
+	const stored = localStorage.getItem(LS_KEYS.remember);
+	const days = stored === null ? REMEMBER_DEFAULT_DAYS : Number(stored);
+	return Number.isFinite(days) && days > 0 ? days : 0;
+}
+
+async function getDeviceKey(create) {
+	let key = await deviceGet(DEVICE_KEY_ENTRY);
+	if (key || !create) return key ?? null;
+	try {
+		key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, [
+			"encrypt",
+			"decrypt",
+		]);
+	} catch {
+		return null;
+	}
+	await deviceSet(DEVICE_KEY_ENTRY, key);
+	return key;
+}
+
+async function wrapVaultKey(rawBytes) {
+	const deviceKey = await getDeviceKey(true);
+	if (!deviceKey) return null;
+	const iv = randomBytes(12);
+	const ciphertext = await crypto.subtle.encrypt(
+		{ name: "AES-GCM", iv, additionalData: DEVICE_AAD },
+		deviceKey,
+		rawBytes,
+	);
+	return `v1.${bytesToB64(iv)}.${bytesToB64(new Uint8Array(ciphertext))}`;
+}
+
+async function unwrapVaultKey(payload) {
+	if (typeof payload !== "string") return null;
+	const deviceKey = await getDeviceKey(false);
+	if (!deviceKey) return null;
+	const [version, ivB64, dataB64] = payload.split(".");
+	if (version !== "v1" || !ivB64 || !dataB64) return null;
+	try {
+		const raw = await crypto.subtle.decrypt(
+			{ name: "AES-GCM", iv: b64ToBytes(ivB64), additionalData: DEVICE_AAD },
+			deviceKey,
+			b64ToBytes(dataB64),
+		);
+		return await crypto.subtle.importKey("raw", raw, { name: "AES-GCM" }, false, [
+			"encrypt",
+			"decrypt",
+		]);
+	} catch {
+		return null;
+	}
+}
+
+async function rememberDevice(rawBytes) {
+	const days = rememberDays();
+	if (!days) {
+		await clearRememberToken();
+		return;
+	}
+	const wrapped = await wrapVaultKey(rawBytes);
+	if (!wrapped) return;
+	const record = {
+		owner: state.email,
+		wrapped,
+		expiresAt: Date.now() + days * 86_400_000,
+		createdAt: new Date().toISOString(),
+	};
+	if (await deviceSet(DEVICE_TOKEN_ENTRY, record)) state.deviceRemember = record;
+}
+
+async function readRememberToken() {
+	const record = await deviceGet(DEVICE_TOKEN_ENTRY);
+	if (!record || typeof record !== "object" || !record.wrapped) return null;
+	if (record.owner !== state.email || !(record.expiresAt > Date.now())) {
+		await clearRememberToken();
+		return null;
+	}
+	return record;
+}
+
+async function renewRememberToken(record) {
+	const days = rememberDays();
+	if (!days) return;
+	const next = { ...record, expiresAt: Date.now() + days * 86_400_000 };
+	if (await deviceSet(DEVICE_TOKEN_ENTRY, next)) state.deviceRemember = next;
+}
+
+async function clearRememberToken() {
+	state.deviceRemember = null;
+	await deviceDelete(DEVICE_TOKEN_ENTRY);
+}
+
+async function forgetDevice() {
+	state.deviceRemember = null;
+	await deviceDelete(DEVICE_TOKEN_ENTRY);
+	await deviceDelete(DEVICE_KEY_ENTRY);
+}
+
+function rememberStatusText() {
+	const days = rememberDays();
+	if (!days) return "已关闭：每次刷新或重新打开都需要输入主密码。";
+	if (state.deviceRemember?.expiresAt) {
+		return `本设备已记住，免密有效至 ${formatDate(state.deviceRemember.expiresAt)}；手动或闲置锁定后会失效。`;
+	}
+	return `已开启 ${days} 天免密解锁，成功解锁一次后生效。`;
 }
 
 /* --------------------------------------------------------------------------
@@ -640,6 +863,7 @@ function visibleItems() {
 		.filter((item) => {
 			if (state.filter === "favorite" && !item.favorite) return false;
 			if (["login", "card", "note"].includes(state.filter) && item.type !== state.filter) return false;
+			if (state.filter.startsWith("tag:") && !item.tags.includes(state.filter.slice(4))) return false;
 			if (!query) return true;
 			return [item.title, item.username, item.url, item.notes, item.cardholder, item.tags.join(" ")]
 				.join(" ")
@@ -681,6 +905,131 @@ function renderList() {
 		fragment.appendChild(li);
 	}
 	list.appendChild(fragment);
+	renderTagChips();
+}
+
+function allTags() {
+	const counts = new Map();
+	for (const item of items()) {
+		for (const tag of item.tags) counts.set(tag, (counts.get(tag) ?? 0) + 1);
+	}
+	return [...counts.entries()].sort(
+		(a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "zh-Hans-CN"),
+	);
+}
+
+function renderTagChips() {
+	const wrap = $("#tag-chips");
+	if (!wrap) return;
+	const tags = allTags();
+	if (tags.length === 0) {
+		wrap.hidden = true;
+		wrap.innerHTML = "";
+		return;
+	}
+	wrap.hidden = false;
+	const activeTag = state.filter.startsWith("tag:") ? state.filter.slice(4) : null;
+	wrap.innerHTML =
+		tags
+			.slice(0, 30)
+			.map(
+				([tag, count]) => `
+				<button class="tag-chip${tag === activeTag ? " is-active" : ""}" type="button" data-tag="${escapeHtml(tag)}">
+					${escapeHtml(tag)}<span>${count}</span>
+				</button>`,
+			)
+			.join("") +
+		`<button class="tag-chip tag-manage" type="button" data-manage-tags title="管理标签" aria-label="管理标签">${icon("settings")}</button>`;
+}
+
+function applyTagChanges(mapping) {
+	let changed = 0;
+	for (const item of items()) {
+		if (!item.tags.length) continue;
+		const next = [];
+		for (const tag of item.tags) {
+			const mapped = mapping.has(tag) ? mapping.get(tag) : tag;
+			if (mapped && !next.includes(mapped)) next.push(mapped);
+		}
+		const isDifferent =
+			next.length !== item.tags.length || next.some((tag, index) => tag !== item.tags[index]);
+		if (isDifferent) {
+			item.tags = next;
+			item.updatedAt = new Date().toISOString();
+			changed++;
+		}
+	}
+
+	if (state.filter.startsWith("tag:")) {
+		const active = state.filter.slice(4);
+		if (!allTags().some(([tag]) => tag === active)) state.filter = "all";
+	}
+
+	if (changed) {
+		markDirty();
+		renderAll();
+		toast(`已更新 ${changed} 个条目的标签`, "ok");
+	} else {
+		renderAll();
+		toast("标签没有变化");
+	}
+}
+
+function openTagManager() {
+	const tags = allTags();
+	const rows = tags.length
+		? tags
+				.map(
+					([tag, count]) => `
+					<div class="tag-row" data-old="${escapeHtml(tag)}">
+						<input type="text" value="${escapeHtml(tag)}" maxlength="40" spellcheck="false" autocomplete="off" aria-label="标签名" />
+						<span class="tag-count">${count} 条</span>
+						<button class="icon-btn" type="button" data-remove aria-label="移除标签">${icon("trash")}</button>
+					</div>`,
+				)
+				.join("")
+		: `<p class="modal-text">还没有标签。在编辑条目时填写「标签」，之后就能在这里统一改名、合并或删除。</p>`;
+
+	openModal({
+		title: "管理标签",
+		size: "modal-sm",
+		body: `${tags.length ? `<div class="tag-rows" id="tag-rows">${rows}</div>` : rows}
+			${tags.length ? '<p class="field-hint">改名会同步更新所有条目；清空输入框或点垃圾桶表示从所有条目中移除。合并到同名标签会自动去重。</p>' : ""}`,
+		footer: tags.length
+			? `<button class="btn btn-ghost" type="button" data-cancel>取消</button>
+				<button class="btn btn-primary" type="button" data-save>保存修改</button>`
+			: `<button class="btn btn-ghost" type="button" data-cancel>关闭</button>`,
+		onMount(m) {
+			m.element.querySelector("[data-cancel]").addEventListener("click", () => m.close());
+			$$("[data-remove]", m.element).forEach((button) => {
+				button.addEventListener("click", () => {
+					const row = button.closest(".tag-row");
+					const input = row.querySelector("input");
+					input.value = "";
+					row.classList.add("is-removing");
+					input.focus();
+				});
+			});
+			m.element.querySelector("[data-save]")?.addEventListener("click", () => {
+				const mapping = new Map();
+				$$(".tag-row", m.element).forEach((row) => {
+					const oldTag = row.dataset.old;
+					const next = row.querySelector("input").value.trim();
+					if (!next) {
+						mapping.set(oldTag, null);
+					} else if (next !== oldTag) {
+						mapping.set(oldTag, next);
+					}
+				});
+				m.close();
+				if (mapping.size === 0) {
+					toast("标签没有变化");
+					return;
+				}
+				applyTagChanges(mapping);
+			});
+		},
+	});
 }
 
 /* --------------------------------------------------------------------------
@@ -865,8 +1214,11 @@ function openEditor(item = null, initialType = "login") {
 		${fieldHtml("notes", "备注", base.notes, { textarea: true, optional: true, placeholder: "安全笔记、恢复码、额外说明…" })}
 		<div class="field">
 			<label for="edit-tags">标签 <span class="muted">（逗号分隔）</span></label>
-			<input id="edit-tags" type="text" value="${escapeHtml(base.tags.join(", "))}" autocomplete="off" placeholder="工作, 个人" />
+			<input id="edit-tags" type="text" value="${escapeHtml(base.tags.join(", "))}" autocomplete="off" placeholder="工作, 个人" list="tag-suggestions" />
 		</div>
+		<datalist id="tag-suggestions">
+			${allTags().map(([tag]) => `<option value="${escapeHtml(tag)}"></option>`).join("")}
+		</datalist>
 		<label class="check"><input type="checkbox" id="edit-favorite" ${base.favorite ? "checked" : ""} />收藏此条目</label>
 		<p class="auth-error" id="edit-error" role="alert" hidden></p>
 	`;
@@ -1163,6 +1515,34 @@ function openSettings() {
 			<select id="set-autolock">${autolock}</select>
 		</div>
 
+		<div class="settings-group-label">安全</div>
+		<div class="field">
+			<label for="set-remember">免密解锁（本设备）</label>
+			<select id="set-remember">
+				<option value="0" ${rememberDays() === 0 ? "selected" : ""}>关闭（每次刷新都要主密码）</option>
+				<option value="7" ${rememberDays() === 7 ? "selected" : ""}>7 天</option>
+				<option value="30" ${rememberDays() === 30 ? "selected" : ""}>30 天</option>
+				<option value="90" ${rememberDays() === 90 ? "selected" : ""}>90 天</option>
+			</select>
+			<p class="field-hint" id="remember-status">${escapeHtml(rememberStatusText())}</p>
+		</div>
+		<div class="settings-list">
+			<button class="settings-item" type="button" data-action="forget-device">
+				<span class="s-icon">${icon("unlock")}</span>
+				<span class="s-text"><strong>忘记此设备</strong><span>立即清除本机的免密凭证与设备密钥</span></span>
+				<span class="s-chev">${icon("chevron")}</span>
+			</button>
+		</div>
+
+		<div class="settings-group-label">标签</div>
+		<div class="settings-list">
+			<button class="settings-item" type="button" data-action="manage-tags">
+				<span class="s-icon">${icon("note")}</span>
+				<span class="s-text"><strong>管理标签</strong><span>${allTags().length ? `${allTags().length} 个标签，可改名、合并或删除` : "还没有标签"}</span></span>
+				<span class="s-chev">${icon("chevron")}</span>
+			</button>
+		</div>
+
 		<div class="settings-group-label">应用</div>
 		<div class="settings-list">
 			<button class="settings-item" type="button" data-action="install">
@@ -1230,15 +1610,34 @@ function openSettings() {
 				localStorage.setItem(LS_KEYS.autolock, String(state.autolockMs));
 				toast("已更新自动锁定时间", "ok");
 			});
+			m.element.querySelector("#set-remember").addEventListener("change", async (event) => {
+				const days = Number(event.target.value);
+				localStorage.setItem(LS_KEYS.remember, String(days));
+				await clearRememberToken();
+				const status = m.element.querySelector("#remember-status");
+				if (status) status.textContent = rememberStatusText();
+				toast(
+					days
+						? `已设置为 ${days} 天免密解锁，重新解锁一次后生效`
+						: "已关闭免密解锁",
+					"ok",
+				);
+			});
 			$$("[data-action]", m.element).forEach((button) => {
-				button.addEventListener("click", () => {
+				button.addEventListener("click", async () => {
 					const action = button.dataset.action;
 					m.close();
 					if (action === "install") installApp();
 					if (action === "export") void exportVault();
 					if (action === "import") void importVault();
 					if (action === "change-password") void changeMasterPassword();
+					if (action === "manage-tags") openTagManager();
+					if (action === "forget-device") {
+						await forgetDevice();
+						toast("已清除本机的免密凭证", "ok");
+					}
 					if (action === "logout") {
+						await clearRememberToken();
 						localStorage.removeItem(LS_KEYS.hint);
 						location.href = "/cdn-cgi/access/logout";
 					}
@@ -1478,7 +1877,7 @@ async function changeMasterPassword() {
 				try {
 					const salt = bytesToB64(randomBytes(16));
 					const iterations = KDF_ITERATIONS;
-					const key = await deriveKey(password.value, salt, iterations);
+					const { sessionKey: key, raw } = await deriveKeyMaterial(password.value, salt, iterations);
 					const ciphertext = await encryptJson(key, state.data);
 					const result = await api("/api/vault", {
 						method: "PUT",
@@ -1496,6 +1895,8 @@ async function changeMasterPassword() {
 						ciphertext,
 					};
 					state.dirty = false;
+					await rememberDevice(raw);
+					raw.fill(0);
 					setSaveState("saved");
 					m.close();
 					toast("主密码已更新", "ok");
@@ -1544,6 +1945,7 @@ async function deleteVault() {
 		state.vault = null;
 		state.locked = true;
 		state.dirty = false;
+		await forgetDevice();
 		localStorage.removeItem(LS_KEYS.hint);
 		showSetup();
 		toast("保险库已删除", "ok");
@@ -1620,6 +2022,15 @@ async function enterVault() {
 	showScreen("screen-vault");
 	$("#screen-vault").dataset.view = "list";
 	$("#account-email").textContent = state.email;
+	if (state.filter.startsWith("tag:")) {
+		const active = state.filter.slice(4);
+		if (!allTags().some(([tag]) => tag === active)) {
+			state.filter = "all";
+			localStorage.setItem(LS_KEYS.filter, "all");
+		}
+	}
+	$$(".chip").forEach((chip) => chip.classList.toggle("is-active", chip.dataset.filter === state.filter));
+
 	const isMobile = window.matchMedia("(max-width: 860px)").matches;
 	state.selectedId = !isMobile ? (visibleItems()[0]?.id ?? null) : null;
 	renderAll();
@@ -1639,6 +2050,8 @@ async function enterVault() {
 
 function wipeSensitiveDom() {
 	$("#item-list").innerHTML = "";
+	$("#tag-chips").innerHTML = "";
+	$("#tag-chips").hidden = true;
 	$("#detail-body").innerHTML = "";
 	$("#detail-body").hidden = true;
 	$("#detail-empty").hidden = false;
@@ -1664,6 +2077,7 @@ async function lockVault({ force = false, skipSave = false, message = "" } = {})
 	state.locked = true;
 	state.dirty = false;
 	state.saving = false;
+	await clearRememberToken();
 	wipeSensitiveDom();
 	showScreen("screen-loading");
 	try {
@@ -1721,8 +2135,36 @@ async function boot() {
 			throw error;
 		});
 		state.vault = vault;
-		if (!vault) showSetup();
-		else showUnlock();
+		if (!vault) {
+			await clearRememberToken();
+			showSetup();
+			return;
+		}
+
+		// Trusted-device auto unlock: unwrap the vault key with the device key.
+		const token = await readRememberToken();
+		if (token) {
+			const key = await unwrapVaultKey(token.wrapped);
+			if (key) {
+				try {
+					const data = normalizeData(await decryptJson(key, vault.ciphertext));
+					state.key = key;
+					state.data = data;
+					state.dirty = false;
+					await enterVault();
+					await renewRememberToken(token);
+					toast("已通过受信任设备解锁", "ok");
+					return;
+				} catch {
+					/* fall through to password unlock */
+				}
+			}
+			await clearRememberToken();
+			showUnlock("此设备的免密凭证已失效，请输入主密码。");
+			return;
+		}
+
+		showUnlock();
 	} catch (error) {
 		console.error(error);
 		showError(error);
@@ -1760,7 +2202,7 @@ function bindStatic() {
 		button.textContent = "正在加密…";
 		try {
 			const salt = bytesToB64(randomBytes(16));
-			const key = await deriveKey(password, salt, KDF_ITERATIONS);
+			const { sessionKey: key, raw } = await deriveKeyMaterial(password, salt, KDF_ITERATIONS);
 			const data = normalizeData({
 				items: [],
 				createdAt: new Date().toISOString(),
@@ -1785,6 +2227,8 @@ function bindStatic() {
 			state.key = key;
 			state.data = data;
 			state.dirty = false;
+			await rememberDevice(raw);
+			raw.fill(0);
 
 			const hint = $("#setup-hint").value.trim();
 			if (hint) localStorage.setItem(LS_KEYS.hint, hint);
@@ -1827,11 +2271,17 @@ function bindStatic() {
 		button.disabled = true;
 		button.textContent = "正在解密…";
 		try {
-			const key = await deriveKey(password, state.vault.kdf.salt, state.vault.kdf.iterations);
+			const { sessionKey: key, raw } = await deriveKeyMaterial(
+				password,
+				state.vault.kdf.salt,
+				state.vault.kdf.iterations,
+			);
 			const data = normalizeData(await decryptJson(key, state.vault.ciphertext));
 			state.key = key;
 			state.data = data;
 			state.dirty = false;
+			await rememberDevice(raw);
+			raw.fill(0);
 			await enterVault();
 			toast("保险库已解锁", "ok");
 		} catch {
@@ -1898,6 +2348,21 @@ function bindStatic() {
 	});
 
 	// ---- item list ----
+	$("#tag-chips").addEventListener("click", (event) => {
+		const manage = event.target.closest("[data-manage-tags]");
+		if (manage) {
+			openTagManager();
+			return;
+		}
+		const chip = event.target.closest("[data-tag]");
+		if (!chip) return;
+		const tag = chip.dataset.tag;
+		state.filter = state.filter === `tag:${tag}` ? "all" : `tag:${tag}`;
+		localStorage.setItem(LS_KEYS.filter, state.filter);
+		$$(".chip").forEach((item) => item.classList.toggle("is-active", item.dataset.filter === state.filter));
+		renderList();
+	});
+
 	$("#item-list").addEventListener("click", (event) => {
 		const fav = event.target.closest("[data-fav]");
 		const row = event.target.closest(".item");
