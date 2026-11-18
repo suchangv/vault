@@ -48,7 +48,7 @@
 - 导入导出：Vault JSON、Bitwarden CSV、Chrome CSV
 - 多标签页并发编辑：版本号冲突时按条目 `updatedAt` 自动合并
 - 移动端适配（列表 ↔ 详情）、快捷键 `Ctrl/⌘ + K` 搜索、`N` 新建
-- **PWA**：可安装到桌面/主屏，独立窗口运行，离线时可加载应用外壳与明确的「无法连接服务器」提示；`?new=login` / `?new=note` 快捷入口
+- **PWA**：可安装到桌面/主屏，独立窗口运行；桌面端启用 **Window Controls Overlay**（系统窗口按钮直接叠在页面上，标题栏与页面背景融为一体）；离线时可加载应用外壳与明确的「无法连接服务器」提示；`?new=login` / `?new=note` 快捷入口
 
 ---
 
@@ -88,7 +88,11 @@ vault/
 
 ## PWA / 离线
 
-- `manifest.webmanifest`：`standalone` 独立窗口、主题色、maskable 图标、两个快捷入口
+- `manifest.webmanifest`：`standalone` 独立窗口、`display_override: ["window-controls-overlay", "standalone"]`、主题色、maskable 图标、两个快捷入口
+- 桌面安装后自动进入 Window Controls Overlay：`navigator.windowControlsOverlay` 汇报标题栏高度，
+  页面顶部预留同高的透明带（露出页面自身背景）并设为拖拽区，系统按钮直接浮在上面
+- `theme-color` 跟随深/浅主题动态更新（Android 状态栏、部分桌面窗口边框），
+  iOS 用 `black-translucent` + `env(safe-area-inset-*)` 让内容避开刘海/状态栏/Home 指示条
 - `sw.js`：预缓存应用外壳（HTML/CSS/JS/图标），导航请求走「网络优先 + 5 秒超时」，
   离线时回退到缓存；**`/api/*` 与 `/cdn-cgi/*` 从不经过缓存**，所以 Cache Storage
   里不会有密文、也不会出现任何解密后的凭据

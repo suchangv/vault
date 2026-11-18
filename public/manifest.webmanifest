@@ -8,10 +8,18 @@
 	"start_url": "/",
 	"scope": "/",
 	"display": "standalone",
+	"display_override": [
+		"window-controls-overlay",
+		"standalone"
+	],
 	"orientation": "any",
 	"background_color": "#070d11",
 	"theme_color": "#070d11",
-	"categories": ["productivity", "utilities", "security"],
+	"categories": [
+		"productivity",
+		"utilities",
+		"security"
+	],
 	"prefer_related_applications": false,
 	"icons": [
 		{
@@ -38,13 +46,23 @@
 			"name": "新建登录",
 			"short_name": "新建登录",
 			"url": "/?new=login",
-			"icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+			"icons": [
+				{
+					"src": "/icons/icon-192.png",
+					"sizes": "192x192"
+				}
+			]
 		},
 		{
 			"name": "新建笔记",
 			"short_name": "新建笔记",
 			"url": "/?new=note",
-			"icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+			"icons": [
+				{
+					"src": "/icons/icon-192.png",
+					"sizes": "192x192"
+				}
+			]
 		}
 	]
 }

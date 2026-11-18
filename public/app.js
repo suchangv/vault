@@ -479,6 +479,39 @@ function applyTheme(theme = state.theme) {
 				: "dark"
 			: theme;
 	document.documentElement.dataset.theme = resolved;
+	const meta = document.getElementById("theme-color-meta");
+	if (meta) meta.setAttribute("content", resolved === "light" ? "#eef3f4" : "#070d11");
+}
+
+/**
+ * Installed desktop PWAs can use the Window Controls Overlay display mode: the
+ * OS window buttons are drawn on top of the page and the title bar can blend
+ * into the app background. We reserve the reported height and expose it as
+ * `--wco-height` so CSS can keep that band clear and draggable.
+ */
+function setupWindowControlsOverlay() {
+	const overlay = navigator.windowControlsOverlay;
+	if (!overlay) return;
+
+	const sync = () => {
+		const visible = overlay.visible === true;
+		document.documentElement.classList.toggle("wco", visible);
+		if (!visible) {
+			document.documentElement.style.removeProperty("--wco-height");
+			return;
+		}
+		try {
+			const rect = overlay.getTitlebarAreaRect?.();
+			if (rect?.height) {
+				document.documentElement.style.setProperty("--wco-height", `${Math.round(rect.height)}px`);
+			}
+		} catch {
+			/* geometry is best-effort */
+		}
+	};
+
+	sync();
+	overlay.addEventListener?.("geometrychange", sync);
 }
 
 /* --------------------------------------------------------------------------
@@ -2117,6 +2150,7 @@ async function boot() {
 
 	bindStatic();
 	startAutolockWatcher();
+	setupWindowControlsOverlay();
 
 	const shortcut = new URL(location.href).searchParams.get("new");
 	if (shortcut) {
