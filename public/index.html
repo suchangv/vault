@@ -8,6 +8,15 @@
 		<meta name="robots" content="noindex, nofollow, noarchive" />
 		<title>Vault</title>
 		<link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+		<link rel="manifest" href="/manifest.webmanifest" />
+		<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+		<meta name="application-name" content="Vault" />
+		<meta name="apple-mobile-web-app-capable" content="yes" />
+		<meta name="mobile-web-app-capable" content="yes" />
+		<meta name="apple-mobile-web-app-title" content="Vault" />
+		<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+		<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#070d11" />
+		<meta name="theme-color" media="(prefers-color-scheme: light)" content="#eef3f4" />
 		<link rel="stylesheet" href="/app.css" />
 	</head>
 	<body>
@@ -154,8 +163,8 @@
 						<button class="btn btn-primary" id="error-reload" type="button">重新加载</button>
 						<button class="btn btn-ghost" id="error-logout" type="button">退出 Access 会话</button>
 					</div>
-					<p class="auth-note">
-						本应用只能通过 Cloudflare Access 登录後访问，白名单账号：<span id="error-allow"></span>
+					<p class="auth-note" id="error-note">
+						本应用只能通过 Cloudflare Access 登录后访问，白名单账号：<span id="error-allow"></span>
 					</p>
 				</div>
 			</section>

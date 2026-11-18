@@ -280,8 +280,20 @@ export default {
 		}
 
 		const response = await env.ASSETS.fetch(request);
-		return withSecurityHeaders(response, {
+		const assetHeaders: Record<string, string> = {
 			"Cache-Control": response.headers.get("Cache-Control") ?? "public, max-age=300",
-		});
+		};
+
+		// The service worker must always revalidate so a new deploy is picked up.
+		if (url.pathname === "/sw.js") {
+			assetHeaders["Cache-Control"] = "no-cache";
+			assetHeaders["Service-Worker-Allowed"] = "/";
+			assetHeaders["Content-Type"] = "text/javascript; charset=utf-8";
+		}
+		if (url.pathname === "/manifest.webmanifest") {
+			assetHeaders["Content-Type"] = "application/manifest+json; charset=utf-8";
+		}
+
+		return withSecurityHeaders(response, assetHeaders);
 	},
 } satisfies ExportedHandler<Env>;

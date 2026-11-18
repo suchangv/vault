@@ -190,7 +190,8 @@ kbd {
    Auth screens
    -------------------------------------------------------------------------- */
 
-.screen-auth {
+.screen-auth,
+.screen-error {
 	display: grid;
 	place-items: center;
 	padding: 32px 20px;

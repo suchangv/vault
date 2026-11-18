@@ -1,0 +1,50 @@
+{
+	"id": "/",
+	"name": "Vault — 密码保险库",
+	"short_name": "Vault",
+	"description": "零知识密码管理器：所有凭据在浏览器端加密后才上传。",
+	"lang": "zh-CN",
+	"dir": "ltr",
+	"start_url": "/",
+	"scope": "/",
+	"display": "standalone",
+	"orientation": "any",
+	"background_color": "#070d11",
+	"theme_color": "#070d11",
+	"categories": ["productivity", "utilities", "security"],
+	"prefer_related_applications": false,
+	"icons": [
+		{
+			"src": "/icons/icon-192.png",
+			"sizes": "192x192",
+			"type": "image/png",
+			"purpose": "any"
+		},
+		{
+			"src": "/icons/icon-512.png",
+			"sizes": "512x512",
+			"type": "image/png",
+			"purpose": "any"
+		},
+		{
+			"src": "/icons/icon-maskable-512.png",
+			"sizes": "512x512",
+			"type": "image/png",
+			"purpose": "maskable"
+		}
+	],
+	"shortcuts": [
+		{
+			"name": "新建登录",
+			"short_name": "新建登录",
+			"url": "/?new=login",
+			"icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+		},
+		{
+			"name": "新建笔记",
+			"short_name": "新建笔记",
+			"url": "/?new=note",
+			"icons": [{ "src": "/icons/icon-192.png", "sizes": "192x192" }]
+		}
+	]
+}

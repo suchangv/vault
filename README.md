@@ -45,6 +45,7 @@
 - 导入导出：Vault JSON、Bitwarden CSV、Chrome CSV
 - 多标签页并发编辑：版本号冲突时按条目 `updatedAt` 自动合并
 - 移动端适配（列表 ↔ 详情）、快捷键 `Ctrl/⌘ + K` 搜索、`N` 新建
+- **PWA**：可安装到桌面/主屏，独立窗口运行，离线时可加载应用外壳与明确的「无法连接服务器」提示；`?new=login` / `?new=note` 快捷入口
 
 ---
 
@@ -59,6 +60,9 @@ vault/
 │   ├── index.html
 │   ├── app.js          # 加密、状态、渲染、交互全部在这里
 │   ├── app.css
+│   ├── manifest.webmanifest
+│   ├── sw.js           # Service Worker：只缓存应用外壳，绝不缓存 API
+│   ├── icons/          # PWA 图标（192/512/maskable/apple-touch）
 │   └── favicon.svg
 ├── migrations/
 │   └── 0001_init.sql   # D1 表结构
@@ -78,6 +82,16 @@ vault/
 | `GET` | `/api/health` | 已登录时的健康检查 |
 
 ---
+
+## PWA / 离线
+
+- `manifest.webmanifest`：`standalone` 独立窗口、主题色、maskable 图标、两个快捷入口
+- `sw.js`：预缓存应用外壳（HTML/CSS/JS/图标），导航请求走「网络优先 + 5 秒超时」，
+  离线时回退到缓存；**`/api/*` 与 `/cdn-cgi/*` 从不经过缓存**，所以 Cache Storage
+  里不会有密文、也不会出现任何解密后的凭据
+- 安装入口在「设置 → 应用 → 安装到桌面」；iOS Safari 会给出「分享 → 添加到主屏幕」的指引
+- 离线时只能打开界面，保险库本身仍需要联网取回密文才能解密
+- 部署后 `sw.js` 返回 `Cache-Control: no-cache`，配合 `network-first` 保证新版本及时生效
 
 ## 本地开发
 

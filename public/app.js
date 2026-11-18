@@ -46,7 +46,11 @@ const state = {
 	autolockMs: 5 * 60_000,
 	theme: "auto",
 	accessExpiresAt: null,
+	pendingNew: null,
 };
+
+let deferredInstallPrompt = null;
+let swRegistration = null;
 
 /* --------------------------------------------------------------------------
  * Icons
@@ -796,11 +800,11 @@ function selectItem(id) {
  * Item editor
  * -------------------------------------------------------------------------- */
 
-function openEditor(item = null) {
+function openEditor(item = null, initialType = "login") {
 	const isNew = !item;
 	const base = item ?? {
 		id: uid(),
-		type: "login",
+		type: ["login", "card", "note"].includes(initialType) ? initialType : "login",
 		title: "",
 		username: "",
 		password: "",
@@ -1097,6 +1101,47 @@ async function resolveConflict(conflict) {
  * Settings
  * -------------------------------------------------------------------------- */
 
+function isStandalone() {
+	return (
+		window.matchMedia("(display-mode: standalone)").matches ||
+		window.matchMedia("(display-mode: minimal-ui)").matches ||
+		navigator.standalone === true
+	);
+}
+
+function installApp() {
+	if (isStandalone()) {
+		toast("已经在独立窗口中运行了", "ok");
+		return;
+	}
+	if (deferredInstallPrompt) {
+		deferredInstallPrompt.prompt();
+		deferredInstallPrompt.userChoice
+			?.then((choice) => {
+				if (choice?.outcome === "accepted") toast("正在安装 Vault…", "ok");
+			})
+			.catch(() => {});
+		deferredInstallPrompt = null;
+		return;
+	}
+	const isIos =
+		/iphone|ipad|ipod/i.test(navigator.userAgent) ||
+		(navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+	openModal({
+		title: "安装到桌面",
+		size: "modal-sm",
+		body: `<p class="modal-text">${
+			isIos
+				? "在 Safari 中点按「分享」按钮，然后选择<strong>添加到主屏幕</strong>，Vault 就会以独立应用窗口打开。"
+				: "在浏览器菜单中选择「安装应用」/「安装 Vault」或「创建快捷方式」，之后即可像原生应用一样打开。"
+		}</p>`,
+		footer: `<button class="btn btn-primary" type="button" data-ok>知道了</button>`,
+		onMount(m) {
+			m.element.querySelector("[data-ok]").addEventListener("click", () => m.close());
+		},
+	});
+}
+
 function openSettings() {
 	const autolock = AUTOLOCK_OPTIONS.map(
 		(option) =>
@@ -1116,6 +1161,17 @@ function openSettings() {
 		<div class="field">
 			<label for="set-autolock">闲置自动锁定</label>
 			<select id="set-autolock">${autolock}</select>
+		</div>
+
+		<div class="settings-group-label">应用</div>
+		<div class="settings-list">
+			<button class="settings-item" type="button" data-action="install">
+				<span class="s-icon">${icon("download")}</span>
+				<span class="s-text"><strong>${isStandalone() ? "已安装为独立应用" : "安装到桌面"}</strong><span>${
+					isStandalone() ? "当前正以 PWA 模式运行" : "像原生应用一样打开，支持离线加载界面"
+				}</span></span>
+				<span class="s-chev">${icon("chevron")}</span>
+			</button>
 		</div>
 
 		<div class="settings-group-label">数据</div>
@@ -1178,6 +1234,7 @@ function openSettings() {
 				button.addEventListener("click", () => {
 					const action = button.dataset.action;
 					m.close();
+					if (action === "install") installApp();
 					if (action === "export") void exportVault();
 					if (action === "import") void importVault();
 					if (action === "change-password") void changeMasterPassword();
@@ -1545,9 +1602,16 @@ function showError(error) {
 	const text =
 		error instanceof ApiError
 			? messages[reason] ?? reason ?? `HTTP ${error.status}`
-			: error?.message ?? "未知错误";
+			: error instanceof TypeError
+				? "无法连接服务器，请检查网络后重试。"
+				: (error?.message ?? "未知错误");
 	$("#error-message").textContent = `${text}${error instanceof ApiError && error.status ? `（HTTP ${error.status}）` : ""}`;
 	$("#error-allow").textContent = state.email || "suchangv@gmail.com";
+
+	const isNetwork = error instanceof TypeError;
+	$("#error-title").textContent = isNetwork ? "网络连接中断" : "身份验证失败";
+	$("#error-note").hidden = isNetwork;
+	$("#error-logout").hidden = isNetwork;
 }
 
 async function enterVault() {
@@ -1561,6 +1625,12 @@ async function enterVault() {
 	renderAll();
 	if (isMobile) setView("list");
 	setSaveState("saved");
+
+	if (state.pendingNew) {
+		const pending = state.pendingNew;
+		state.pendingNew = null;
+		openEditor(null, pending);
+	}
 }
 
 /* --------------------------------------------------------------------------
@@ -1633,6 +1703,14 @@ async function boot() {
 
 	bindStatic();
 	startAutolockWatcher();
+
+	const shortcut = new URL(location.href).searchParams.get("new");
+	if (shortcut) {
+		state.pendingNew = ["login", "card", "note"].includes(shortcut) ? shortcut : "login";
+		history.replaceState(null, "", location.pathname);
+	}
+
+	void registerServiceWorker();
 
 	try {
 		const me = await api("/api/me");
@@ -1932,6 +2010,37 @@ function bindStatic() {
 	$$(".chip").forEach((chip) => {
 		chip.classList.toggle("is-active", chip.dataset.filter === state.filter);
 	});
+
+	// ---- PWA ----
+	window.addEventListener("beforeinstallprompt", (event) => {
+		event.preventDefault();
+		deferredInstallPrompt = event;
+	});
+	window.addEventListener("appinstalled", () => {
+		deferredInstallPrompt = null;
+		toast("Vault 已安装到桌面", "ok");
+	});
+
+	// ---- connectivity ----
+	window.addEventListener("offline", () => toast("网络已断开", "error", 4000));
+	window.addEventListener("online", () => toast("网络已恢复", "ok"));
+}
+
+async function registerServiceWorker() {
+	if (!("serviceWorker" in navigator)) return;
+	try {
+		swRegistration = await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+		swRegistration.addEventListener("updatefound", () => {
+			const worker = swRegistration.installing;
+			worker?.addEventListener("statechange", () => {
+				if (worker.state === "installed" && navigator.serviceWorker.controller) {
+					toast("应用已更新，下次打开生效", "ok", 4000);
+				}
+			});
+		});
+	} catch (error) {
+		console.warn("service worker registration failed", error);
+	}
 }
 
 boot();
