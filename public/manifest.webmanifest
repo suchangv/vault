@@ -13,8 +13,8 @@
 		"standalone"
 	],
 	"orientation": "any",
-	"background_color": "#070d11",
-	"theme_color": "#070d11",
+	"background_color": "#09090f",
+	"theme_color": "#09090f",
 	"categories": [
 		"productivity",
 		"utilities",

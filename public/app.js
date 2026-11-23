@@ -480,7 +480,7 @@ function applyTheme(theme = state.theme) {
 			: theme;
 	document.documentElement.dataset.theme = resolved;
 	const meta = document.getElementById("theme-color-meta");
-	if (meta) meta.setAttribute("content", resolved === "light" ? "#eef3f4" : "#070d11");
+	if (meta) meta.setAttribute("content", resolved === "light" ? "#f2f2f7" : "#09090f");
 }
 
 /**

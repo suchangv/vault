@@ -7,7 +7,7 @@
  * "无法连接服务器" state), never stale credentials.
  * ========================================================================== */
 
-const VERSION = "1";
+const VERSION = "3";
 const CACHE_NAME = `vault-shell-v${VERSION}`;
 const SHELL_FALLBACK = "/index.html";
 
