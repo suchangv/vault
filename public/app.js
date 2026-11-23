@@ -556,15 +556,12 @@ function openModal({ title, body, footer = "", size = "", onMount, closable = tr
 		if (previousActive instanceof HTMLElement) previousActive.focus?.();
 	};
 	const onKey = (event) => {
-		if (event.key === "Escape" && closable) {
+		if (event.key === "Escape" && closable && backdrop === root.lastElementChild) {
 			event.stopPropagation();
 			close();
 		}
 	};
 
-	backdrop.addEventListener("click", (event) => {
-		if (event.target === backdrop && closable) close();
-	});
 	backdrop.querySelector("[data-close]")?.addEventListener("click", close);
 	document.addEventListener("keydown", onKey);
 	root.appendChild(backdrop);
